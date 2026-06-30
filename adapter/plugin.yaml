@@ -1,2 +1,19 @@
 name: hermes-bridge
+label: Hermes Bridge
 kind: platform
+version: 0.1.0
+description: >
+  Pont de communication entre agents Hermes. Ouvre une connexion WebSocket
+  sortante vers un relais hermes-bridge ; les messages reçus déclenchent un
+  tour d'inférence normal. Les réponses sont envoyées via le tool MCP
+  `reply`, pas par cet adapter.
+author: aidalinfo
+requires_env:
+  - name: HERMES_BRIDGE_TOKEN
+    description: "Token d'authentification du bot auprès du relais hermes-bridge"
+    prompt: "Token hermes-bridge"
+    password: true
+  - name: HERMES_BRIDGE_RELAY_URL
+    description: "URL WebSocket du relais (ex: wss://hermes-bridge.aidalinfo.xx/bridge/connect)"
+    prompt: "URL du relais hermes-bridge"
+    password: false
