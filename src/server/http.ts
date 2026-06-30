@@ -32,6 +32,10 @@ export async function createHttpServer(deps: HandlerDeps): Promise<Server> {
 
     const mcpServer = buildMcpServer(deps, caller.name)
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+    res.on('close', () => {
+      transport.close().catch((err) => console.error('Error closing MCP transport:', err))
+      mcpServer.close().catch((err) => console.error('Error closing MCP server:', err))
+    })
     await mcpServer.connect(transport)
     await transport.handleRequest(req, res)
   })
