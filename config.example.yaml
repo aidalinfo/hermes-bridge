@@ -1,0 +1,6 @@
+agents:
+  - name: daniel-bot
+    token: change-me-daniel-token
+  - name: helpdesk-bot
+    token: change-me-helpdesk-token
+ask_timeout_ms: 120000
