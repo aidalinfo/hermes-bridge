@@ -9,7 +9,9 @@
   },
   "files": [
     "dist",
-    "adapter"
+    "adapter/plugin.yaml",
+    "adapter/adapter.py",
+    "adapter/wake.py"
   ],
   "scripts": {
     "build": "tsc",
