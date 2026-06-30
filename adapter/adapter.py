@@ -82,7 +82,7 @@ class HermesBridgeAdapter(BasePlatformAdapter):
             try:
                 async with websockets.connect(
                     self._relay_url,
-                    extra_headers={"Authorization": f"Bearer {self._token}"},
+                    additional_headers={"Authorization": f"Bearer {self._token}"},
                 ) as ws:
                     self._ws = ws
                     backoff_idx = 0
