@@ -62,6 +62,30 @@ mcp_servers:
     access_mode: read_write
 ```
 
+## Observabilité
+
+Chaque échange `ask_agent` → `reply` (ou timeout/déconnexion) peut être
+exporté vers une instance [Langfuse](https://langfuse.com/) existante
+(cloud ou self-hosted), regroupé par `conversation_id` — les échanges
+multi-tours d'une même conversation apparaissent comme plusieurs spans
+d'une seule trace :
+
+```yaml
+langfuse:
+  public_key: pk-lf-...
+  secret_key: sk-lf-...
+  base_url: https://cloud.langfuse.com   # optionnel, défaut cloud Langfuse
+```
+
+Sans cette section, le relais fonctionne normalement sans appel réseau vers
+Langfuse.
+
+Le relais expose aussi une page `/ui` (ex: `http://<host-du-relais>:8787/ui`)
+listant les agents connus et les échanges récents, rafraîchie automatiquement
+toutes les 3 secondes. Cette page **n'est pas authentifiée** — si le relais
+est exposé publiquement, mettez-la derrière un reverse-proxy protégé si vous
+ne voulez pas qu'elle soit visible de tous.
+
 ## Développement
 
 ```bash
