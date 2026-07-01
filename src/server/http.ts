@@ -26,7 +26,7 @@ export async function createHttpServer(deps: HandlerDeps): Promise<Server> {
 
     if (url.pathname === UI_STATE_PATH) {
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(buildStateJson(deps))
+      res.end(await buildStateJson(deps))
       return
     }
 

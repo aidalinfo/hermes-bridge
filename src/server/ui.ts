@@ -1,10 +1,10 @@
 import type { HandlerDeps } from './handlers.js'
 import { handleListAgents } from './handlers.js'
 
-export function buildStateJson(deps: HandlerDeps): string {
+export async function buildStateJson(deps: HandlerDeps): Promise<string> {
   return JSON.stringify({
     agents: handleListAgents(deps),
-    exchanges: deps.telemetry.recentExchanges(),
+    exchanges: await deps.telemetry.recentExchanges(),
   })
 }
 

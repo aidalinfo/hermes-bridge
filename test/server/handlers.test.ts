@@ -101,7 +101,7 @@ describe('handleAskAgent', () => {
     handleReply(deps, { request_id: delivered!.request_id, answer: '42' })
     await pending
 
-    const exchanges = telemetry.recentExchanges()
+    const exchanges = await telemetry.recentExchanges()
     expect(exchanges).toHaveLength(1)
     expect(exchanges[0]).toEqual(
       expect.objectContaining({

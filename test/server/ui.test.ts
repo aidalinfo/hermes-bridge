@@ -12,7 +12,7 @@ function setup() {
 }
 
 describe('buildStateJson', () => {
-  it('reports agents and recorded exchanges', () => {
+  it('reports agents and recorded exchanges', async () => {
     const { deps, telemetry } = setup()
     const record = telemetry.recordStart({
       conversationId: 'conv-1',
@@ -23,7 +23,7 @@ describe('buildStateJson', () => {
     })
     telemetry.recordEnd(record, { status: 'ok', answer: '42' })
 
-    const state = JSON.parse(buildStateJson(deps))
+    const state = JSON.parse(await buildStateJson(deps))
     expect(state.agents).toEqual([{ name: 'daniel-bot', online: false }])
     expect(state.exchanges).toEqual([
       expect.objectContaining({ conversation_id: 'conv-1', status: 'ok', answer: '42' }),

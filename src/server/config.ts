@@ -12,6 +12,15 @@ const ConfigSchema = z.object({
       base_url: z.string().optional(),
     })
     .optional(),
+  // connection_string is optional here on purpose: it can come from
+  // DATABASE_URL instead (see index.ts), so committing a secret-bearing
+  // connection string to config.yaml is never required.
+  db: z
+    .object({
+      driver: z.literal('postgres').default('postgres'),
+      connection_string: z.string().optional(),
+    })
+    .optional(),
 })
 
 export type BridgeConfig = z.infer<typeof ConfigSchema>

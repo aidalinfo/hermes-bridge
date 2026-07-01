@@ -4,9 +4,18 @@ agents:
   - name: helpdesk-bot
     token: change-me-helpdesk-token
 ask_timeout_ms: 120000
-# Optionnel : export des échanges vers une instance Langfuse existante,
-# et active les données affichées par /ui.
+# Optionnel : export des échanges vers une instance Langfuse existante.
 # langfuse:
 #   public_key: pk-lf-...
 #   secret_key: sk-lf-...
 #   base_url: https://cloud.langfuse.com
+
+# Optionnel : persiste chaque échange (ask_agent -> reply) dans une base —
+# sans ça, l'historique vit en mémoire et disparaît à chaque redémarrage du
+# relais (redeploy Coolify, restart du conteneur...). Seul postgres est
+# implémenté aujourd'hui ; connection_string peut aussi venir de la variable
+# d'env DATABASE_URL (préférable pour ne pas committer un secret ici) — dans
+# ce cas ce bloc peut être omis entièrement.
+# db:
+#   driver: postgres    # défaut si omis, seule valeur supportée
+#   connection_string: postgresql://user:pass@host:5432/hermes_bridge

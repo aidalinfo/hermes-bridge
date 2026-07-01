@@ -12,6 +12,7 @@ vi.mock('langfuse', () => ({
 }))
 
 import { createTelemetry } from '../../src/server/telemetry.js'
+import type { ExchangeStore } from '../../src/server/db.js'
 import { Langfuse } from 'langfuse'
 
 const LangfuseMock = vi.mocked(Langfuse)
@@ -43,8 +44,8 @@ describe('createTelemetry without config (no-op)', () => {
     expect(traceMock).not.toHaveBeenCalled()
   })
 
-  it('caps history at maxHistory entries, oldest first out', () => {
-    const telemetry = createTelemetry(undefined, 2)
+  it('caps history at maxHistory entries, oldest first out', async () => {
+    const telemetry = createTelemetry(undefined, undefined, 2)
     for (let i = 0; i < 3; i++) {
       telemetry.recordStart({
         conversationId: `conv-${i}`,
@@ -54,7 +55,7 @@ describe('createTelemetry without config (no-op)', () => {
         message: 'hi',
       })
     }
-    const exchanges = telemetry.recentExchanges()
+    const exchanges = await telemetry.recentExchanges()
     expect(exchanges).toHaveLength(2)
     expect(exchanges.map((e) => e.request_id)).toEqual(['req-1', 'req-2'])
   })
@@ -125,7 +126,7 @@ describe('createTelemetry with langfuse config', () => {
     expect(shutdownAsyncMock).toHaveBeenCalled()
   })
 
-  it('does not throw when the langfuse constructor throws', () => {
+  it('does not throw when the langfuse constructor throws', async () => {
     LangfuseMock.mockImplementationOnce(() => {
       throw new Error('constructor failed')
     })
@@ -140,8 +141,97 @@ describe('createTelemetry with langfuse config', () => {
     expect(record.status).toBe('pending')
     telemetry.recordEnd(record, { status: 'ok', answer: '42' })
     expect(record.status).toBe('ok')
-    expect(telemetry.recentExchanges()).toHaveLength(1)
+    await expect(telemetry.recentExchanges()).resolves.toHaveLength(1)
     // Verify the instance fell back to no-op mode: trace mock should not have been called
     expect(traceMock).not.toHaveBeenCalled()
+  })
+})
+
+function fakeStore(): ExchangeStore & { started: any[]; ended: any[] } {
+  const started: any[] = []
+  const ended: any[] = []
+  const rows: any[] = []
+  return {
+    started,
+    ended,
+    async insertStart(record) {
+      started.push(record)
+      rows.push({ ...record })
+    },
+    async updateEnd(record) {
+      ended.push(record)
+      const row = rows.find((r) => r.request_id === record.request_id)
+      if (row) Object.assign(row, record)
+    },
+    async recentExchanges() {
+      return [...rows]
+    },
+    async shutdown() {},
+  }
+}
+
+describe('createTelemetry with a db store', () => {
+  it('persists recordStart/recordEnd to the store without blocking the caller', async () => {
+    const store = fakeStore()
+    const telemetry = createTelemetry(undefined, store)
+    const record = telemetry.recordStart({
+      conversationId: 'conv-1',
+      requestId: 'req-1',
+      from: 'daniel-bot',
+      to: 'helpdesk-bot',
+      message: 'hi',
+    })
+    telemetry.recordEnd(record, { status: 'ok', answer: '42' })
+    // Fire-and-forget: give the microtask queue a turn to flush the writes.
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(store.started).toHaveLength(1)
+    expect(store.ended).toHaveLength(1)
+    expect(store.ended[0]).toEqual(expect.objectContaining({ request_id: 'req-1', status: 'ok', answer: '42' }))
+  })
+
+  it('recentExchanges reads from the store (durable) instead of the in-memory array', async () => {
+    const store = fakeStore()
+    const telemetry = createTelemetry(undefined, store)
+    const record = telemetry.recordStart({
+      conversationId: 'conv-1',
+      requestId: 'req-1',
+      from: 'daniel-bot',
+      to: 'helpdesk-bot',
+      message: 'hi',
+    })
+    telemetry.recordEnd(record, { status: 'ok', answer: '42' })
+    await new Promise((r) => setTimeout(r, 0))
+
+    await expect(telemetry.recentExchanges()).resolves.toEqual([
+      expect.objectContaining({ request_id: 'req-1', status: 'ok', answer: '42' }),
+    ])
+  })
+
+  it('falls back to in-memory history when the store read fails', async () => {
+    const store = fakeStore()
+    store.recentExchanges = async () => {
+      throw new Error('db down')
+    }
+    const telemetry = createTelemetry(undefined, store)
+    telemetry.recordStart({
+      conversationId: 'conv-1',
+      requestId: 'req-1',
+      from: 'daniel-bot',
+      to: 'helpdesk-bot',
+      message: 'hi',
+    })
+
+    await expect(telemetry.recentExchanges()).resolves.toEqual([
+      expect.objectContaining({ request_id: 'req-1', status: 'pending' }),
+    ])
+  })
+
+  it('shutdown closes the store', async () => {
+    const store = fakeStore()
+    const shutdownSpy = vi.spyOn(store, 'shutdown')
+    const telemetry = createTelemetry(undefined, store)
+    await telemetry.shutdown()
+    expect(shutdownSpy).toHaveBeenCalledOnce()
   })
 })

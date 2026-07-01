@@ -124,6 +124,43 @@ mcp_servers:
     access_mode: read_write
 ```
 
+## Persistance (mode db)
+
+Par défaut, l'historique des échanges vit en mémoire (`maxHistory=200`,
+`telemetry.ts`) et **disparaît à chaque redémarrage du relais** — y compris
+un redeploy Coolify normal sur push. Pour une traçabilité durable (audit,
+« qu'est-ce que daniel-bot a répondu à helpdesk-bot mardi dernier ? »),
+configurez une base — seul postgres est implémenté, et c'est le driver par
+défaut :
+
+```yaml
+db:
+  driver: postgres              # défaut si omis
+  connection_string: postgresql://user:pass@host:5432/hermes_bridge
+```
+
+`connection_string` peut aussi venir de la variable d'env `DATABASE_URL`
+(recommandé — évite de committer un secret dans `config.yaml` ; dans ce cas
+le bloc `db:` peut être omis entièrement). Le mode db s'active dès que
+`config.db.connection_string` **ou** `DATABASE_URL` est renseigné.
+
+Ce que ça change concrètement :
+
+- La table `hermes_bridge_exchanges` est créée automatiquement au démarrage
+  (`src/server/db.ts`, `CREATE TABLE IF NOT EXISTS`) — aucune migration
+  manuelle.
+- Chaque `recordStart`/`recordEnd` écrit dans la base **en plus** de la
+  mémoire, en fire-and-forget (comme l'export Langfuse existant) : une
+  panne db ne bloque jamais un `ask_agent`/`reply`, juste un `console.warn`
+  (throttlé à une fois).
+- **`/ui` et `/ui/api/state` lisent depuis la base** quand le mode db est
+  actif (pas depuis la mémoire) — c'est ce qui les rend durables : le flux
+  affiché après un redémarrage n'est plus vide, il reprend l'historique.
+  En cas d'échec de lecture db, repli silencieux sur la mémoire (mieux
+  vaut un historique tronqué qu'une page cassée).
+- Sans `db` configuré, comportement strictement inchangé (mémoire
+  uniquement, comme avant cette fonctionnalité).
+
 ## Observabilité
 
 Chaque échange `ask_agent` → `reply` (ou timeout/déconnexion) peut être
@@ -140,7 +177,9 @@ langfuse:
 ```
 
 Sans cette section, le relais fonctionne normalement sans appel réseau vers
-Langfuse.
+Langfuse. Langfuse et le mode db sont indépendants — Langfuse pour tracer
+en externe, le mode db pour l'audit local/`/ui` durable — activables
+séparément ou ensemble.
 
 Le relais expose aussi une page `/ui` (ex: `http://<host-du-relais>:8787/ui`),
 **« Conversations entre agents »** — layout et styles Forma importés du

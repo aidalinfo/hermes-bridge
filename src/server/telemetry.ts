@@ -1,4 +1,5 @@
 import { Langfuse } from 'langfuse'
+import type { ExchangeStore } from './db.js'
 
 export type ExchangeStatus =
   | 'pending'
@@ -40,17 +41,24 @@ export interface TelemetryRecorder {
     record: ExchangeRecord,
     result: { status: ExchangeStatus; answer?: string; error?: string },
   ): void
-  recentExchanges(): ExchangeRecord[]
+  recentExchanges(): Promise<ExchangeRecord[]>
   shutdown(): Promise<void>
 }
 
-export function createTelemetry(config: LangfuseConfig | undefined, maxHistory = 200): TelemetryRecorder {
+export function createTelemetry(
+  config: LangfuseConfig | undefined,
+  store: ExchangeStore | undefined = undefined,
+  maxHistory = 200,
+): TelemetryRecorder {
   const history: ExchangeRecord[] = []
-  let warned = false
-  const warnOnce = (err: unknown): void => {
-    if (warned) return
-    warned = true
-    console.warn('hermes-bridge: langfuse export failed, continuing without telemetry export', err)
+  let warnedLangfuse = false
+  let warnedDb = false
+  const warnOnce = (flag: 'langfuse' | 'db', message: string, err: unknown): void => {
+    const already = flag === 'langfuse' ? warnedLangfuse : warnedDb
+    if (already) return
+    if (flag === 'langfuse') warnedLangfuse = true
+    else warnedDb = true
+    console.warn(message, err)
   }
 
   let langfuse: InstanceType<typeof Langfuse> | undefined
@@ -58,7 +66,7 @@ export function createTelemetry(config: LangfuseConfig | undefined, maxHistory =
     try {
       langfuse = new Langfuse({ publicKey: config.public_key, secretKey: config.secret_key, baseUrl: config.base_url })
     } catch (err) {
-      warnOnce(err)
+      warnOnce('langfuse', 'hermes-bridge: langfuse export failed, continuing without telemetry export', err)
       langfuse = undefined
     }
   }
@@ -76,6 +84,12 @@ export function createTelemetry(config: LangfuseConfig | undefined, maxHistory =
       }
       history.push(record)
       if (history.length > maxHistory) history.shift()
+
+      if (store) {
+        store
+          .insertStart(record)
+          .catch((err) => warnOnce('db', 'hermes-bridge: db insert failed, continuing without db persistence', err))
+      }
       return record
     },
     recordEnd(record, result) {
@@ -83,6 +97,12 @@ export function createTelemetry(config: LangfuseConfig | undefined, maxHistory =
       record.answer = result.answer
       record.error = result.error
       record.ended_at = Date.now()
+
+      if (store) {
+        store
+          .updateEnd(record)
+          .catch((err) => warnOnce('db', 'hermes-bridge: db update failed, continuing without db persistence', err))
+      }
 
       if (!langfuse) return
       try {
@@ -96,18 +116,36 @@ export function createTelemetry(config: LangfuseConfig | undefined, maxHistory =
           endTime: new Date(record.ended_at),
         })
       } catch (err) {
-        warnOnce(err)
+        warnOnce('langfuse', 'hermes-bridge: langfuse export failed, continuing without telemetry export', err)
       }
     },
-    recentExchanges() {
+    async recentExchanges() {
+      // The db (when configured) is the durable source of truth — it
+      // survives restarts, the in-memory array doesn't. Fall back to
+      // in-memory only when no db is configured at all.
+      if (store) {
+        try {
+          return await store.recentExchanges(maxHistory)
+        } catch (err) {
+          warnOnce('db', 'hermes-bridge: db read failed, falling back to in-memory history', err)
+        }
+      }
       return [...history]
     },
     async shutdown() {
-      if (!langfuse) return
-      try {
-        await langfuse.shutdownAsync()
-      } catch (err) {
-        warnOnce(err)
+      if (langfuse) {
+        try {
+          await langfuse.shutdownAsync()
+        } catch (err) {
+          warnOnce('langfuse', 'hermes-bridge: langfuse export failed, continuing without telemetry export', err)
+        }
+      }
+      if (store) {
+        try {
+          await store.shutdown()
+        } catch (err) {
+          warnOnce('db', 'hermes-bridge: db shutdown failed', err)
+        }
       }
     },
   }

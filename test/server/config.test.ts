@@ -62,4 +62,32 @@ describe('loadConfig', () => {
     writeFileSync(path, 'agents: []\nlangfuse:\n  public_key: pk-test\n')
     expect(() => loadConfig(path)).toThrow()
   })
+
+  it('parses an optional db section, defaulting driver to postgres', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hermes-bridge-'))
+    const path = join(dir, 'config.yaml')
+    writeFileSync(
+      path,
+      'agents: []\ndb:\n  connection_string: postgresql://user:pass@localhost:5432/hermes_bridge\n',
+    )
+    const config = loadConfig(path)
+    expect(config.db).toEqual({
+      driver: 'postgres',
+      connection_string: 'postgresql://user:pass@localhost:5432/hermes_bridge',
+    })
+  })
+
+  it('allows a db section with no connection_string (falls back to DATABASE_URL at runtime)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hermes-bridge-'))
+    const path = join(dir, 'config.yaml')
+    writeFileSync(path, 'agents: []\ndb:\n  driver: postgres\n')
+    expect(loadConfig(path).db).toEqual({ driver: 'postgres', connection_string: undefined })
+  })
+
+  it('leaves db undefined when omitted', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hermes-bridge-'))
+    const path = join(dir, 'config.yaml')
+    writeFileSync(path, 'agents: []\n')
+    expect(loadConfig(path).db).toBeUndefined()
+  })
 })
