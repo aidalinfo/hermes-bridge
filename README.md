@@ -11,13 +11,19 @@ dépendre d'un service tiers (pas de Teams, pas de ntfy, pas de Raft).
   `reply`, `list_agents` — sur `mcp_servers` (transport HTTP), et un endpoint
   WebSocket (`/bridge/connect`) que chaque bot rejoint en sortant.
 - **L'adapter** (`adapter/`) est un plugin "platform" Hermes installé dans
-  `/opt/data/.hermes/plugins/hermes-bridge/` de chaque bot — il réveille
+  `/opt/data/plugins/hermes-bridge/` de chaque bot — il réveille
   l'agent (déclenche un tour d'inférence) quand un message arrive, sans
   toucher au core Hermes ni nécessiter un rebuild d'image.
 - **`ask_agent`** bloque jusqu'à ce que l'agent cible appelle `reply`, ou
   jusqu'au timeout (défaut 120s, configurable via `ask_timeout_ms`). Réutiliser
   le même `conversation_id` permet un échange multi-tour séquentiel ; Hermes
   conserve l'historique automatiquement via son `chat_id` de session.
+- **Timeout intelligent (heartbeat)** : `ask_timeout_ms` n'est qu'un filet de
+  sécurité contre un agent réellement bloqué/planté. Tant que l'agent cible
+  tourne (appel d'outil ou d'LLM) sur la session ouverte par le wake, son
+  adapter le signale au relais (`extendRequest`) et repousse l'échéance —
+  une réponse lente mais vivante (plusieurs tool calls, lookup mémoire…) ne
+  se fait donc pas couper juste parce qu'elle dépasse le chiffre par défaut.
 
 Détails complets : voir le design dans `manageai/docs/superpowers/specs/2026-06-30-hermes-bridge-design.md`.
 

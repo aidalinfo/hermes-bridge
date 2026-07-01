@@ -12,12 +12,18 @@ beforeEach(() => {
 })
 
 describe('runInstall', () => {
-  it('copies the adapter files into .hermes/plugins/hermes-bridge', () => {
+  it('copies the adapter files into plugins/hermes-bridge (Hermes user-plugin dir when HERMES_HOME=dataDir)', () => {
     runInstall({ token: 'tok-daniel', relayUrl: 'wss://relay.example/bridge/connect', dataDir })
-    const pluginDir = join(dataDir, '.hermes', 'plugins', 'hermes-bridge')
+    // NOT `.hermes/plugins/hermes-bridge` — Hermes' get_hermes_home() only
+    // appends `.hermes` when HERMES_HOME is unset (native default: ~/.hermes).
+    // The bot image sets HERMES_HOME=/opt/data explicitly, so the user-plugin
+    // scan dir is `<dataDir>/plugins`, not `<dataDir>/.hermes/plugins`.
+    const pluginDir = join(dataDir, 'plugins', 'hermes-bridge')
     expect(existsSync(join(pluginDir, 'plugin.yaml'))).toBe(true)
+    expect(existsSync(join(pluginDir, '__init__.py'))).toBe(true)
     expect(existsSync(join(pluginDir, 'adapter.py'))).toBe(true)
     expect(existsSync(join(pluginDir, 'wake.py'))).toBe(true)
+    expect(existsSync(join(dataDir, '.hermes', 'plugins', 'hermes-bridge'))).toBe(false)
   })
 
   it('adds hermes-bridge to plugins.enabled in config.yaml without duplicating it on a second run', () => {

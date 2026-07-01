@@ -16,7 +16,11 @@ export interface InstallOptions {
 
 export function runInstall(opts: InstallOptions): void {
   const dataDir = opts.dataDir ?? '/opt/data'
-  const pluginDir = join(dataDir, '.hermes', 'plugins', 'hermes-bridge')
+  // Hermes' `get_hermes_home()` only appends `.hermes` when HERMES_HOME is
+  // *unset* (native install default: `~/.hermes`). The bot Docker image sets
+  // HERMES_HOME=/opt/data explicitly, so the "user plugins" dir Hermes
+  // actually scans is `<dataDir>/plugins`, not `<dataDir>/.hermes/plugins`.
+  const pluginDir = join(dataDir, 'plugins', 'hermes-bridge')
   mkdirSync(pluginDir, { recursive: true })
   cpSync(join(ADAPTER_SRC_DIR, 'plugin.yaml'), join(pluginDir, 'plugin.yaml'))
   cpSync(join(ADAPTER_SRC_DIR, '__init__.py'), join(pluginDir, '__init__.py'))
