@@ -53,7 +53,7 @@ export function createTelemetry(config: LangfuseConfig | undefined, maxHistory =
     console.warn('hermes-bridge: langfuse export failed, continuing without telemetry export', err)
   }
 
-  let langfuse: ReturnType<typeof Langfuse> | undefined
+  let langfuse: InstanceType<typeof Langfuse> | undefined
   if (config) {
     try {
       langfuse = new Langfuse({ publicKey: config.public_key, secretKey: config.secret_key, baseUrl: config.base_url })
