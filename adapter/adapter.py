@@ -36,7 +36,7 @@ from gateway.platforms.base import (
 )
 from gateway.session import build_session_key
 
-from wake import build_wake_text, parse_wake_payload, session_chat_id
+from .wake import build_wake_text, parse_wake_payload, session_chat_id
 
 logger = logging.getLogger(__name__)
 

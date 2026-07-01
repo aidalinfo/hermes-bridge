@@ -10,6 +10,7 @@
   "files": [
     "dist",
     "adapter/plugin.yaml",
+    "adapter/__init__.py",
     "adapter/adapter.py",
     "adapter/wake.py"
   ],
