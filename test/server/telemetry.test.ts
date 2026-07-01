@@ -129,7 +129,6 @@ describe('createTelemetry with langfuse config', () => {
     LangfuseMock.mockImplementationOnce(() => {
       throw new Error('constructor failed')
     })
-    expect(() => createTelemetry({ public_key: 'pk', secret_key: 'sk' })).not.toThrow()
     const telemetry = createTelemetry({ public_key: 'pk', secret_key: 'sk' })
     const record = telemetry.recordStart({
       conversationId: 'conv-1',
@@ -139,8 +138,10 @@ describe('createTelemetry with langfuse config', () => {
       message: 'hi',
     })
     expect(record.status).toBe('pending')
-    expect(() => telemetry.recordEnd(record, { status: 'ok', answer: '42' })).not.toThrow()
+    telemetry.recordEnd(record, { status: 'ok', answer: '42' })
     expect(record.status).toBe('ok')
     expect(telemetry.recentExchanges()).toHaveLength(1)
+    // Verify the instance fell back to no-op mode: trace mock should not have been called
+    expect(traceMock).not.toHaveBeenCalled()
   })
 })
