@@ -46,15 +46,21 @@ export interface TelemetryRecorder {
 
 export function createTelemetry(config: LangfuseConfig | undefined, maxHistory = 200): TelemetryRecorder {
   const history: ExchangeRecord[] = []
-  const langfuse = config
-    ? new Langfuse({ publicKey: config.public_key, secretKey: config.secret_key, baseUrl: config.base_url })
-    : undefined
-
   let warned = false
   const warnOnce = (err: unknown): void => {
     if (warned) return
     warned = true
     console.warn('hermes-bridge: langfuse export failed, continuing without telemetry export', err)
+  }
+
+  let langfuse: ReturnType<typeof Langfuse> | undefined
+  if (config) {
+    try {
+      langfuse = new Langfuse({ publicKey: config.public_key, secretKey: config.secret_key, baseUrl: config.base_url })
+    } catch (err) {
+      warnOnce(err)
+      langfuse = undefined
+    }
   }
 
   return {

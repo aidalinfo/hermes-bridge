@@ -12,8 +12,15 @@ vi.mock('langfuse', () => ({
 }))
 
 import { createTelemetry } from '../../src/server/telemetry.js'
+import { Langfuse } from 'langfuse'
+
+const LangfuseMock = vi.mocked(Langfuse)
 
 beforeEach(() => {
+  LangfuseMock.mockImplementation(() => ({
+    trace: traceMock,
+    shutdownAsync: shutdownAsyncMock,
+  }))
   traceMock.mockClear()
   traceSpanMock.mockClear()
   shutdownAsyncMock.mockClear()
@@ -116,5 +123,24 @@ describe('createTelemetry with langfuse config', () => {
     const telemetry = createTelemetry({ public_key: 'pk', secret_key: 'sk' })
     await telemetry.shutdown()
     expect(shutdownAsyncMock).toHaveBeenCalled()
+  })
+
+  it('does not throw when the langfuse constructor throws', () => {
+    LangfuseMock.mockImplementationOnce(() => {
+      throw new Error('constructor failed')
+    })
+    expect(() => createTelemetry({ public_key: 'pk', secret_key: 'sk' })).not.toThrow()
+    const telemetry = createTelemetry({ public_key: 'pk', secret_key: 'sk' })
+    const record = telemetry.recordStart({
+      conversationId: 'conv-1',
+      requestId: 'req-1',
+      from: 'daniel-bot',
+      to: 'helpdesk-bot',
+      message: 'hi',
+    })
+    expect(record.status).toBe('pending')
+    expect(() => telemetry.recordEnd(record, { status: 'ok', answer: '42' })).not.toThrow()
+    expect(record.status).toBe('ok')
+    expect(telemetry.recentExchanges()).toHaveLength(1)
   })
 })
