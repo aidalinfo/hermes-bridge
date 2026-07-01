@@ -7,6 +7,7 @@ import { createHttpServer } from '../../src/server/http.js'
 import { attachBridgeWs } from '../../src/server/bridge-ws.js'
 import { AgentRegistry } from '../../src/server/registry.js'
 import { ConversationStore } from '../../src/server/conversations.js'
+import { createTelemetry } from '../../src/server/telemetry.js'
 
 const AGENTS = [
   { name: 'daniel-bot', token: 'tok-daniel' },
@@ -16,7 +17,8 @@ const AGENTS = [
 async function startServer(timeoutMs = 5000) {
   const registry = new AgentRegistry(AGENTS)
   const conversations = new ConversationStore(timeoutMs)
-  const httpServer = await createHttpServer({ registry, conversations })
+  const telemetry = createTelemetry(undefined)
+  const httpServer = await createHttpServer({ registry, conversations, telemetry })
   attachBridgeWs(httpServer, { registry, conversations })
   const port = await new Promise<number>((resolve) => {
     httpServer.listen(0, () => {
@@ -167,5 +169,48 @@ describe('hermes-bridge end-to-end', () => {
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
     })
     expect(response.status).toBe(401)
+  })
+
+  it('serves the ui html page', async () => {
+    const started = await startServer()
+    httpServer = started.httpServer
+    const response = await fetch(`http://127.0.0.1:${started.port}/ui`)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('text/html')
+  })
+
+  it('serves the ui state as json with agents and exchanges', async () => {
+    const started = await startServer()
+    httpServer = started.httpServer
+    await connectBot(started.port, 'tok-daniel')
+    const helpdeskWs = await connectBot(started.port, 'tok-helpdesk')
+    helpdeskWs.on('message', async (raw) => {
+      const wake = JSON.parse(raw.toString())
+      const helpdeskClient = await mcpClient(started.port, 'tok-helpdesk')
+      await helpdeskClient.callTool({
+        name: 'reply',
+        arguments: { request_id: wake.request_id, answer: 'pong' },
+      })
+    })
+    const danielClient = await mcpClient(started.port, 'tok-daniel')
+    await danielClient.callTool({ name: 'ask_agent', arguments: { to: 'helpdesk-bot', message: 'ping' } })
+
+    const response = await fetch(`http://127.0.0.1:${started.port}/ui/api/state`)
+    const state = await response.json()
+    expect(state.agents).toEqual(
+      expect.arrayContaining([
+        { name: 'daniel-bot', online: true },
+        { name: 'helpdesk-bot', online: true },
+      ]),
+    )
+    expect(state.exchanges).toEqual([
+      expect.objectContaining({
+        from: 'daniel-bot',
+        to: 'helpdesk-bot',
+        message: 'ping',
+        status: 'ok',
+        answer: 'pong',
+      }),
+    ])
   })
 })

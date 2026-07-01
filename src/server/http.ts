@@ -2,8 +2,11 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type { HandlerDeps } from './handlers.js'
 import { buildMcpServer } from './mcp.js'
+import { buildStateJson, renderUiPage } from './ui.js'
 
 const MCP_PATH = '/mcp'
+const UI_PATH = '/ui'
+const UI_STATE_PATH = '/ui/api/state'
 
 export async function createHttpServer(deps: HandlerDeps): Promise<Server> {
   return createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -12,6 +15,18 @@ export async function createHttpServer(deps: HandlerDeps): Promise<Server> {
     if (url.pathname === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ status: 'ok' }))
+      return
+    }
+
+    if (url.pathname === UI_PATH) {
+      res.writeHead(200, { 'content-type': 'text/html' })
+      res.end(renderUiPage())
+      return
+    }
+
+    if (url.pathname === UI_STATE_PATH) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(buildStateJson(deps))
       return
     }
 
