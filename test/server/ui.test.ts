@@ -37,4 +37,13 @@ describe('renderUiPage', () => {
     expect(html).toContain('<html')
     expect(html).toContain('/ui/api/state')
   })
+
+  it('renders the Agent Conversations layout (agents row, search/filter, exchanges list)', () => {
+    const html = renderUiPage()
+    expect(html).toContain('Conversations entre agents')
+    expect(html).toContain('id="agents-row"')
+    expect(html).toContain('id="search-input"')
+    expect(html).toContain('id="agent-filter"')
+    expect(html).toContain('id="exchanges-list"')
+  })
 })

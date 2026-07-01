@@ -5,27 +5,65 @@ Relais MCP pour la communication synchrone et multi-tour entre agents Hermes
 question à un autre bot Hermes connu du relais et attendre sa réponse — sans
 dépendre d'un service tiers (pas de Teams, pas de ntfy, pas de Raft).
 
-## Comment ça marche
+## Architecture
+
+```
+  bot A (adapter)                    relais (src/server/)                  bot B (adapter)
+  ──────────────                     ────────────────────                  ──────────────
+  tool ask_agent(to=B,...) ───HTTP/MCP──▶ handleAskAgent                     
+                                       │  registry.has(B)?
+                                       │  ConversationStore.createRequest ── wake JSON ──WS──▶ _on_wake()
+                                       │  (request_id, timer=ask_timeout_ms)                    │
+                                       │                                                        │ tour d'inférence
+                                       │                       ◀── heartbeat {request_id} ──WS── │ (post_tool_call/
+                                       │  extendRequest (ré-arme le timer)                       │  post_llm_call)
+                                       │                                                        │
+                                       │  ◀── tool reply(request_id, answer) ───HTTP/MCP────────┘
+  ask_agent() se résout ◀── answer ────┘  resolveRequest
+```
 
 - **Le relais** (`src/server/`) expose trois tools MCP — `ask_agent`,
   `reply`, `list_agents` — sur `mcp_servers` (transport HTTP), et un endpoint
-  WebSocket (`/bridge/connect`) que chaque bot rejoint en sortant.
+  WebSocket (`/bridge/connect`) que chaque bot rejoint en sortant (jamais
+  l'inverse : le relais n'a besoin d'aucun accès réseau vers les bots).
 - **L'adapter** (`adapter/`) est un plugin "platform" Hermes installé dans
   `/opt/data/plugins/hermes-bridge/` de chaque bot — il réveille
   l'agent (déclenche un tour d'inférence) quand un message arrive, sans
   toucher au core Hermes ni nécessiter un rebuild d'image.
+  - ⚠️ Le chemin compte : c'est `<HERMES_HOME>/plugins/<name>/`, **pas**
+    `<HERMES_HOME>/.hermes/plugins/<name>/`. `get_hermes_home()` (Hermes)
+    n'ajoute `.hermes` que quand `HERMES_HOME` est *absent* (défaut natif
+    `~/.hermes`) — l'image Docker des bots fixe `HERMES_HOME=/opt/data`
+    explicitement, donc le dossier de scan réel est `/opt/data/plugins`.
+    `npx @aidalinfo/hermes-bridge install` gère ça correctement depuis la
+    0.1.1 ; si un bot a été installé avant, relancer `install` pour corriger
+    l'emplacement, puis redémarrer le conteneur.
 - **`ask_agent`** bloque jusqu'à ce que l'agent cible appelle `reply`, ou
   jusqu'au timeout (défaut 120s, configurable via `ask_timeout_ms`). Réutiliser
   le même `conversation_id` permet un échange multi-tour séquentiel ; Hermes
   conserve l'historique automatiquement via son `chat_id` de session.
 - **Timeout intelligent (heartbeat)** : `ask_timeout_ms` n'est qu'un filet de
-  sécurité contre un agent réellement bloqué/planté. Tant que l'agent cible
-  tourne (appel d'outil ou d'LLM) sur la session ouverte par le wake, son
-  adapter le signale au relais (`extendRequest`) et repousse l'échéance —
-  une réponse lente mais vivante (plusieurs tool calls, lookup mémoire…) ne
-  se fait donc pas couper juste parce qu'elle dépasse le chiffre par défaut.
+  sécurité contre un agent réellement bloqué/planté, pas une estimation à
+  deviner pour les réponses lentes (plusieurs tool calls, lookup mémoire…).
+  L'adapter de l'agent **cible** s'abonne aux hooks Hermes `post_tool_call` /
+  `post_llm_call` (les mêmes points d'extension que le statut « busy » natif
+  de Hermes, et le même pattern que l'adapter `raft` bundlé). Tant que la
+  session ouverte par le wake est active, chaque appel d'outil ou d'LLM
+  envoie une frame `{"type":"heartbeat","request_id":"..."}` sur la **même
+  connexion WebSocket sortante** (pas un nouveau canal), throttlée à 1 toutes
+  les 5s par session. Le relais (`ConversationStore.extendRequest`) ré-arme
+  alors le timer de ce `request_id` pour une fenêtre complète. `on_session_end`
+  nettoie le suivi quand le tour se termine. Résultat : le délai ne compte
+  vraiment que si l'agent s'est *arrêté* de travailler, pas s'il est juste lent.
+  - ⚠️ Ce mécanisme est **entièrement côté adapter + relais** — aucune action
+    requise de l'agent/LLM cible (il ne « sait » même pas que ça existe).
+  - ⚠️ **Le relais doit être redéployé** pour que le heartbeat fonctionne :
+    publier une nouvelle version npm de l'adapter ne suffit pas, le serveur
+    (`src/server/bridge-ws.ts` + `conversations.ts`) doit tourner avec le code
+    à jour pour comprendre les frames `heartbeat` — sinon `ask_timeout_ms`
+    reste un mur fixe côté relais même si l'adapter envoie bien les heartbeats.
 
-Détails complets : voir le design dans `manageai/docs/superpowers/specs/2026-06-30-hermes-bridge-design.md`.
+Détails de conception complets : voir `manageai/docs/superpowers/specs/2026-06-30-hermes-bridge-design.md`.
 
 ## Déployer le relais
 
@@ -86,11 +124,27 @@ langfuse:
 Sans cette section, le relais fonctionne normalement sans appel réseau vers
 Langfuse.
 
-Le relais expose aussi une page `/ui` (ex: `http://<host-du-relais>:8787/ui`)
-listant les agents connus et les échanges récents, rafraîchie automatiquement
-toutes les 3 secondes. Cette page **n'est pas authentifiée** — si le relais
-est exposé publiquement, mettez-la derrière un reverse-proxy protégé si vous
-ne voulez pas qu'elle soit visible de tous.
+Le relais expose aussi une page `/ui` (ex: `http://<host-du-relais>:8787/ui`),
+**« Conversations entre agents »** — layout et styles Forma importés du
+projet Claude Design
+[`Visualiser les conversations d'agents`](https://claude.ai/design/p/2463da63-90c9-4f82-9afd-d2011605f90c?file=Agent+Conversations.dc.html)
+(voir `src/server/ui.ts`, réimplémenté en HTML/JS sans dépendance, branché sur
+les vraies données au lieu des exemples du prototype) :
+
+- Un badge par agent connu (en ligne / hors ligne, point de couleur), rangée
+  du haut.
+- Une recherche texte (message + réponse/erreur) et un filtre par agent.
+- Un flux des échanges les plus récents en premier, chacun avec `from → to`,
+  durée, badge de statut (`ok`, `timeout`, `agent hors ligne`,
+  `agent déconnecté`, `agent inconnu`, `conversation inconnue`, `en cours`),
+  message tronqué à 180 caractères avec un bouton **Voir plus/moins** qui
+  révèle la réponse (ou « En attente de réponse… » tant que c'est `pending`).
+- Rafraîchissement automatique (`fetch('/ui/api/state')` toutes les 3s) sans
+  perdre la recherche/le filtre/les échanges dépliés en cours.
+
+Cette page **n'est pas authentifiée** — elle affiche le contenu intégral des
+messages/réponses. Si le relais est exposé au-delà d'un LAN de confiance,
+mettez-la derrière un reverse-proxy protégé.
 
 ## Développement
 
