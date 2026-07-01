@@ -7,9 +7,16 @@ helpers and wires them into Hermes' platform-adapter machinery.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+import re
+from typing import Any, Dict, Optional
 
 _REQUIRED_FIELDS = ("request_id", "conversation_id", "from", "message")
+
+# Matches the "request_id=<id>" this module's own build_wake_text() embeds in
+# the wake text. Used by adapter.py's heartbeat hooks to read the request_id
+# back out of Hermes' pre_llm_call kwargs (agent.session_id has no relation
+# to anything the adapter can precompute — see adapter.py for the full story).
+_REQUEST_ID_IN_TEXT_RE = re.compile(r"request_id=([^,\s)]+)")
 
 
 def session_chat_id(conversation_id: str) -> str:
@@ -29,6 +36,23 @@ def build_wake_text(payload: Dict[str, Any]) -> str:
         f'Réponds avec le tool reply(request_id="{request_id}", answer=...), '
         f'ou continue la conversation avec ask_agent(to, message, conversation_id="{conversation_id}").'
     )
+
+
+def extract_request_id(wake_text: str) -> Optional[str]:
+    """Read a request_id back out of text built by build_wake_text(), or None."""
+    match = _REQUEST_ID_IN_TEXT_RE.search(wake_text)
+    return match.group(1) if match else None
+
+
+def platform_value(value: Any) -> str:
+    """Unwrap a `gateway.config.Platform` enum member to its string value.
+
+    Hermes hook kwargs hand back whatever `agent.platform` holds, which is
+    the Enum member itself (Platform is a plain Enum, not `str, Enum`) —
+    comparing it directly to a literal like "hermes-bridge" is always False.
+    Same workaround the bundled `raft` adapter uses for this exact contract.
+    """
+    return str(getattr(value, "value", value) or "")
 
 
 def parse_wake_payload(raw: str) -> Dict[str, Any]:

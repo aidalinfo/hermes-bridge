@@ -45,23 +45,41 @@ dépendre d'un service tiers (pas de Teams, pas de ntfy, pas de Raft).
 - **Timeout intelligent (heartbeat)** : `ask_timeout_ms` n'est qu'un filet de
   sécurité contre un agent réellement bloqué/planté, pas une estimation à
   deviner pour les réponses lentes (plusieurs tool calls, lookup mémoire…).
-  L'adapter de l'agent **cible** s'abonne aux hooks Hermes `post_tool_call` /
-  `post_llm_call` (les mêmes points d'extension que le statut « busy » natif
-  de Hermes, et le même pattern que l'adapter `raft` bundlé). Tant que la
-  session ouverte par le wake est active, chaque appel d'outil ou d'LLM
+  L'adapter de l'agent **cible** s'abonne aux hooks Hermes `pre_llm_call` /
+  `post_tool_call` / `post_llm_call` (les mêmes points d'extension que le
+  statut « busy » natif de Hermes, et le même pattern que l'adapter `raft`
+  bundlé). Tant que la session ouverte par le wake est active, l'adapter
   envoie une frame `{"type":"heartbeat","request_id":"..."}` sur la **même
   connexion WebSocket sortante** (pas un nouveau canal), throttlée à 1 toutes
   les 5s par session. Le relais (`ConversationStore.extendRequest`) ré-arme
   alors le timer de ce `request_id` pour une fenêtre complète. `on_session_end`
   nettoie le suivi quand le tour se termine. Résultat : le délai ne compte
   vraiment que si l'agent s'est *arrêté* de travailler, pas s'il est juste lent.
+  - ⚠️ **Le point piégeux** : les hooks Hermes exposent `session_id =
+    agent.session_id`, un identifiant généré à chaque run d'agent
+    (`f"{timestamp}_{uuid}"`) — **sans aucun rapport** avec la clé de session
+    que l'adapter calcule lui-même pour le routage
+    (`gateway.session.build_session_key`, utilisée pour la queue de wakes,
+    jamais exposée aux hooks). Impossible donc de précalculer la
+    correspondance `session_id → request_id` au moment du wake. La solution :
+    `wake.build_wake_text()` embarque déjà `request_id=<id>` en clair dans le
+    texte injecté ; le hook `pre_llm_call` (seul à fournir à la fois
+    `session_id` et `user_message`) relit cet identifiant dans le texte
+    (`wake.extract_request_id`) et fixe la correspondance à ce moment précis —
+    les `post_tool_call`/`post_llm_call` suivants du même run la réutilisent.
+    Autre piège du même hook : `platform` y est le membre d'enum
+    `gateway.config.Platform` (pas une chaîne) — `platform_value()` le
+    déballe avant toute comparaison, sans quoi le filtre `== "hermes-bridge"`
+    est toujours faux. Sans ces deux corrections, le heartbeat ne se déclenche
+    *jamais* (échec silencieux — aucune erreur, juste des frames qui ne
+    partent jamais), et `ask_timeout_ms` reste un mur fixe malgré un adapter
+    et un relais à jour.
   - ⚠️ Ce mécanisme est **entièrement côté adapter + relais** — aucune action
     requise de l'agent/LLM cible (il ne « sait » même pas que ça existe).
   - ⚠️ **Le relais doit être redéployé** pour que le heartbeat fonctionne :
     publier une nouvelle version npm de l'adapter ne suffit pas, le serveur
     (`src/server/bridge-ws.ts` + `conversations.ts`) doit tourner avec le code
-    à jour pour comprendre les frames `heartbeat` — sinon `ask_timeout_ms`
-    reste un mur fixe côté relais même si l'adapter envoie bien les heartbeats.
+    à jour pour comprendre les frames `heartbeat`.
 
 Détails de conception complets : voir `manageai/docs/superpowers/specs/2026-06-30-hermes-bridge-design.md`.
 

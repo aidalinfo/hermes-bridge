@@ -39,7 +39,13 @@ from gateway.platforms.base import (
 )
 from gateway.session import build_session_key
 
-from .wake import build_wake_text, parse_wake_payload, session_chat_id
+from .wake import (
+    build_wake_text,
+    extract_request_id,
+    parse_wake_payload,
+    platform_value,
+    session_chat_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +57,23 @@ RECONNECT_BACKOFF = [2, 5, 10, 30, 60]
 # iteration.
 HEARTBEAT_MIN_INTERVAL_S = 5.0
 
-# Hooks (post_tool_call/post_llm_call/on_session_end) are module-level
-# callbacks with no reference to the adapter instance that registered them —
-# same pattern as the bundled `raft` adapter. There is only ever one
-# hermes-bridge adapter per gateway process (one outbound relay connection),
-# so a single slot is enough; no need for raft's multi-adapter set.
+# Hermes' hooks pass `session_id=agent.session_id` — an identifier generated
+# fresh per agent run (agent_init.py: f"{timestamp}_{short_uuid}"). It has no
+# relation to `build_session_key()` (that's a routing/continuity key, used
+# for message-queuing, not exposed to hooks at all). So the request_id this
+# turn is answering can't be *computed* in advance from the wake — it has to
+# be *read back* out of what Hermes hands the hook. `pre_llm_call` is the
+# first hook that gives us both `session_id` and `user_message`, and our own
+# wake.build_wake_text() embeds "request_id=<id>" in that exact text — so we
+# parse it back out (wake.extract_request_id) and bind session_id ->
+# request_id right there. Every later post_tool_call/post_llm_call in the
+# same run just reuses the binding.
+
+# Hooks are module-level callbacks with no reference to the adapter instance
+# that registered them — same pattern as the bundled `raft` adapter. There
+# is only ever one hermes-bridge adapter per gateway process (one outbound
+# relay connection), so a single slot is enough; no need for raft's
+# multi-adapter set.
 _ACTIVE_ADAPTER_LOCK = threading.Lock()
 _ACTIVE_ADAPTER: Optional["HermesBridgeAdapter"] = None
 
@@ -63,6 +81,18 @@ _ACTIVE_ADAPTER: Optional["HermesBridgeAdapter"] = None
 def _get_active_adapter() -> Optional["HermesBridgeAdapter"]:
     with _ACTIVE_ADAPTER_LOCK:
         return _ACTIVE_ADAPTER
+
+
+def _on_pre_llm_call(**kwargs: Any) -> None:
+    adapter = _get_active_adapter()
+    if adapter is None:
+        return
+    session_id = kwargs.get("session_id")
+    if platform_value(kwargs.get("platform")) == "hermes-bridge":
+        request_id = extract_request_id(kwargs.get("user_message") or "")
+        if request_id:
+            adapter.bind_session(session_id, request_id)
+    adapter.note_activity(session_id)
 
 
 def _on_post_tool_call(**kwargs: Any) -> None:
@@ -103,9 +133,10 @@ class HermesBridgeAdapter(BasePlatformAdapter):
         self._task: Optional[asyncio.Task] = None
         self._running = True
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        # session_key -> request_id for turns currently running because of a
-        # hermes-bridge wake, so post_tool_call/post_llm_call hooks (see
-        # module level) know which pending relay request to keep alive.
+        # agent.session_id -> request_id, bound by _on_pre_llm_call (see
+        # module level) the moment a hermes-bridge turn starts, so later
+        # post_tool_call/post_llm_call hooks in the same run know which
+        # pending relay request to keep alive.
         self._session_requests: Dict[str, str] = {}
         self._last_heartbeat: Dict[str, float] = {}
         self._heartbeat_lock = threading.Lock()
@@ -169,13 +200,6 @@ class HermesBridgeAdapter(BasePlatformAdapter):
             user_id=payload["from"],
             user_name=payload["from"],
         )
-        # Recorded *before* dispatch so the post_tool_call/post_llm_call hooks
-        # can find this request_id as soon as the turn starts doing anything.
-        session_key = build_session_key(
-            source, group_sessions_per_user=True, thread_sessions_per_user=False
-        )
-        with self._heartbeat_lock:
-            self._session_requests[session_key] = payload["request_id"]
         event = MessageEvent(
             text=build_wake_text(payload),
             message_type=MessageType.TEXT,
@@ -217,14 +241,28 @@ class HermesBridgeAdapter(BasePlatformAdapter):
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         return {"name": chat_id, "type": "hermes-bridge"}
 
+    def bind_session(self, session_id: Optional[str], request_id: str) -> None:
+        """Record that *session_id* (a live agent run) is answering *request_id*.
+
+        Called from _on_pre_llm_call once it's parsed the request_id back out
+        of the wake text Hermes handed it — see the module-level comment on
+        _REQUEST_ID_IN_TEXT_RE for why this can't just be precomputed in
+        _on_wake.
+        """
+        if not session_id:
+            return
+        with self._heartbeat_lock:
+            self._session_requests[session_id] = request_id
+
     def note_activity(self, session_id: Optional[str]) -> None:
         """Called from a plugin hook (any thread) on genuine turn activity.
 
-        If *session_id* matches a session we woke for hermes-bridge, tell the
-        relay to push out that request's deadline — this is what lets a slow
-        multi-tool-call answer survive past a fixed `ask_timeout_ms` without
-        having to guess a bigger number: the timeout only matters once the
-        agent has gone quiet, not while it's demonstrably still working.
+        If *session_id* is bound to a pending hermes-bridge request (see
+        bind_session), tell the relay to push out that request's deadline —
+        this is what lets a slow multi-tool-call answer survive past a fixed
+        `ask_timeout_ms` without having to guess a bigger number: the timeout
+        only matters once the agent has gone quiet, not while it's
+        demonstrably still working.
         """
         if not session_id or self._loop is None:
             return
@@ -276,6 +314,7 @@ def register(ctx) -> None:
     )
     # Heartbeat: keep a slow-but-alive answer from being killed by the
     # relay's fixed ask_timeout_ms (see note_activity/forget_session above).
+    ctx.register_hook("pre_llm_call", _on_pre_llm_call)
     ctx.register_hook("post_tool_call", _on_post_tool_call)
     ctx.register_hook("post_llm_call", _on_post_llm_call)
     ctx.register_hook("on_session_end", _on_session_end)

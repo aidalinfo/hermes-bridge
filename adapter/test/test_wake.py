@@ -19,6 +19,8 @@ _spec.loader.exec_module(wake)
 build_wake_text = wake.build_wake_text
 parse_wake_payload = wake.parse_wake_payload
 session_chat_id = wake.session_chat_id
+extract_request_id = wake.extract_request_id
+platform_value = wake.platform_value
 
 
 def test_session_chat_id_is_namespaced_by_conversation():
@@ -72,3 +74,34 @@ def test_parse_wake_payload_rejects_missing_required_fields(missing_field):
     del payload[missing_field]
     with pytest.raises(ValueError):
         parse_wake_payload(json.dumps(payload))
+
+
+def test_extract_request_id_round_trips_through_build_wake_text():
+    text = build_wake_text(
+        {
+            "request_id": "3b357adf-9f17-4907-a6d8-a3c202f6dfc1",
+            "conversation_id": "conv-1",
+            "from": "helpdesk-bot",
+            "message": "hi",
+        }
+    )
+    assert extract_request_id(text) == "3b357adf-9f17-4907-a6d8-a3c202f6dfc1"
+
+
+def test_extract_request_id_returns_none_when_absent():
+    assert extract_request_id("just a normal message, no ids here") is None
+
+
+def test_platform_value_unwraps_an_enum_like_object_with_a_value_attribute():
+    class FakePlatform:
+        value = "hermes-bridge"
+
+    assert platform_value(FakePlatform()) == "hermes-bridge"
+
+
+def test_platform_value_passes_through_a_plain_string():
+    assert platform_value("hermes-bridge") == "hermes-bridge"
+
+
+def test_platform_value_of_none_is_empty_string():
+    assert platform_value(None) == ""
