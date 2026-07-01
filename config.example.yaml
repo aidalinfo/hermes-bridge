@@ -4,3 +4,9 @@ agents:
   - name: helpdesk-bot
     token: change-me-helpdesk-token
 ask_timeout_ms: 120000
+# Optionnel : export des échanges vers une instance Langfuse existante,
+# et active les données affichées par /ui.
+# langfuse:
+#   public_key: pk-lf-...
+#   secret_key: sk-lf-...
+#   base_url: https://cloud.langfuse.com

@@ -33,4 +33,33 @@ describe('loadConfig', () => {
     writeFileSync(path, 'agents:\n  - name: daniel-bot\n')
     expect(() => loadConfig(path)).toThrow()
   })
+
+  it('parses an optional langfuse section', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hermes-bridge-'))
+    const path = join(dir, 'config.yaml')
+    writeFileSync(
+      path,
+      'agents: []\nlangfuse:\n  public_key: pk-test\n  secret_key: sk-test\n  base_url: https://langfuse.example.com\n',
+    )
+    const config = loadConfig(path)
+    expect(config.langfuse).toEqual({
+      public_key: 'pk-test',
+      secret_key: 'sk-test',
+      base_url: 'https://langfuse.example.com',
+    })
+  })
+
+  it('leaves langfuse undefined when omitted', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hermes-bridge-'))
+    const path = join(dir, 'config.yaml')
+    writeFileSync(path, 'agents: []\n')
+    expect(loadConfig(path).langfuse).toBeUndefined()
+  })
+
+  it('throws when langfuse is present but missing secret_key', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hermes-bridge-'))
+    const path = join(dir, 'config.yaml')
+    writeFileSync(path, 'agents: []\nlangfuse:\n  public_key: pk-test\n')
+    expect(() => loadConfig(path)).toThrow()
+  })
 })
