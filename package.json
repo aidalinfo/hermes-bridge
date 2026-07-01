@@ -1,6 +1,6 @@
 {
   "name": "@aidalinfo/hermes-bridge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Relais MCP pour la communication synchrone entre agents Hermes.",
   "type": "module",
   "license": "MIT",

@@ -2,7 +2,7 @@
 
 Ships as a Hermes "platform" plugin (same extension point as the bundled
 teams/discord/ntfy adapters). Installed at runtime into
-``/opt/data/.hermes/plugins/hermes-bridge/`` by ``npx @aidalinfo/hermes-bridge
+``/opt/data/plugins/hermes-bridge/`` by ``npx @aidalinfo/hermes-bridge
 install`` — no Hermes image rebuild required.
 
 Opens an outbound WebSocket connection to the hermes-bridge relay (the bot
@@ -14,8 +14,11 @@ relay's `reply` MCP tool — this adapter never sends content itself.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import threading
+import time
 from typing import Any, Dict, Optional
 
 try:
@@ -42,6 +45,43 @@ logger = logging.getLogger(__name__)
 
 RECONNECT_BACKOFF = [2, 5, 10, 30, 60]
 
+# Minimum spacing between heartbeat frames for the same session — a tool-call
+# loop can fire post_tool_call several times a second; the relay only needs
+# to know "still alive" roughly as often as its timeout window, not on every
+# iteration.
+HEARTBEAT_MIN_INTERVAL_S = 5.0
+
+# Hooks (post_tool_call/post_llm_call/on_session_end) are module-level
+# callbacks with no reference to the adapter instance that registered them —
+# same pattern as the bundled `raft` adapter. There is only ever one
+# hermes-bridge adapter per gateway process (one outbound relay connection),
+# so a single slot is enough; no need for raft's multi-adapter set.
+_ACTIVE_ADAPTER_LOCK = threading.Lock()
+_ACTIVE_ADAPTER: Optional["HermesBridgeAdapter"] = None
+
+
+def _get_active_adapter() -> Optional["HermesBridgeAdapter"]:
+    with _ACTIVE_ADAPTER_LOCK:
+        return _ACTIVE_ADAPTER
+
+
+def _on_post_tool_call(**kwargs: Any) -> None:
+    adapter = _get_active_adapter()
+    if adapter is not None:
+        adapter.note_activity(kwargs.get("session_id"))
+
+
+def _on_post_llm_call(**kwargs: Any) -> None:
+    adapter = _get_active_adapter()
+    if adapter is not None:
+        adapter.note_activity(kwargs.get("session_id"))
+
+
+def _on_session_end(**kwargs: Any) -> None:
+    adapter = _get_active_adapter()
+    if adapter is not None:
+        adapter.forget_session(kwargs.get("session_id"))
+
 
 def check_requirements() -> bool:
     """Check whether the adapter is installable and minimally configured."""
@@ -62,10 +102,21 @@ class HermesBridgeAdapter(BasePlatformAdapter):
         self._ws = None
         self._task: Optional[asyncio.Task] = None
         self._running = True
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # session_key -> request_id for turns currently running because of a
+        # hermes-bridge wake, so post_tool_call/post_llm_call hooks (see
+        # module level) know which pending relay request to keep alive.
+        self._session_requests: Dict[str, str] = {}
+        self._last_heartbeat: Dict[str, float] = {}
+        self._heartbeat_lock = threading.Lock()
 
     async def connect(self) -> bool:
+        self._loop = asyncio.get_running_loop()
         self._task = asyncio.create_task(self._run())
         self._mark_connected()
+        global _ACTIVE_ADAPTER
+        with _ACTIVE_ADAPTER_LOCK:
+            _ACTIVE_ADAPTER = self
         return True
 
     async def disconnect(self) -> None:
@@ -74,6 +125,10 @@ class HermesBridgeAdapter(BasePlatformAdapter):
             self._task.cancel()
         if self._ws is not None:
             await self._ws.close()
+        global _ACTIVE_ADAPTER
+        with _ACTIVE_ADAPTER_LOCK:
+            if _ACTIVE_ADAPTER is self:
+                _ACTIVE_ADAPTER = None
         self._mark_disconnected()
 
     async def _run(self) -> None:
@@ -114,6 +169,13 @@ class HermesBridgeAdapter(BasePlatformAdapter):
             user_id=payload["from"],
             user_name=payload["from"],
         )
+        # Recorded *before* dispatch so the post_tool_call/post_llm_call hooks
+        # can find this request_id as soon as the turn starts doing anything.
+        session_key = build_session_key(
+            source, group_sessions_per_user=True, thread_sessions_per_user=False
+        )
+        with self._heartbeat_lock:
+            self._session_requests[session_key] = payload["request_id"]
         event = MessageEvent(
             text=build_wake_text(payload),
             message_type=MessageType.TEXT,
@@ -155,6 +217,44 @@ class HermesBridgeAdapter(BasePlatformAdapter):
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         return {"name": chat_id, "type": "hermes-bridge"}
 
+    def note_activity(self, session_id: Optional[str]) -> None:
+        """Called from a plugin hook (any thread) on genuine turn activity.
+
+        If *session_id* matches a session we woke for hermes-bridge, tell the
+        relay to push out that request's deadline — this is what lets a slow
+        multi-tool-call answer survive past a fixed `ask_timeout_ms` without
+        having to guess a bigger number: the timeout only matters once the
+        agent has gone quiet, not while it's demonstrably still working.
+        """
+        if not session_id or self._loop is None:
+            return
+        now = time.monotonic()
+        with self._heartbeat_lock:
+            request_id = self._session_requests.get(session_id)
+            if request_id is None:
+                return
+            if now - self._last_heartbeat.get(session_id, 0.0) < HEARTBEAT_MIN_INTERVAL_S:
+                return
+            self._last_heartbeat[session_id] = now
+        asyncio.run_coroutine_threadsafe(self._send_heartbeat(request_id), self._loop)
+
+    def forget_session(self, session_id: Optional[str]) -> None:
+        """Stop tracking a session once its turn ends (hook: on_session_end)."""
+        if not session_id:
+            return
+        with self._heartbeat_lock:
+            self._session_requests.pop(session_id, None)
+            self._last_heartbeat.pop(session_id, None)
+
+    async def _send_heartbeat(self, request_id: str) -> None:
+        ws = self._ws
+        if ws is None:
+            return
+        try:
+            await ws.send(json.dumps({"type": "heartbeat", "request_id": request_id}))
+        except Exception:
+            logger.debug("[hermes-bridge] heartbeat send failed", exc_info=True)
+
 
 def register(ctx) -> None:
     """Plugin entry point — called by the Hermes plugin loader at startup."""
@@ -174,3 +274,8 @@ def register(ctx) -> None:
             "poursuivre un échange déjà ouvert."
         ),
     )
+    # Heartbeat: keep a slow-but-alive answer from being killed by the
+    # relay's fixed ask_timeout_ms (see note_activity/forget_session above).
+    ctx.register_hook("post_tool_call", _on_post_tool_call)
+    ctx.register_hook("post_llm_call", _on_post_llm_call)
+    ctx.register_hook("on_session_end", _on_session_end)

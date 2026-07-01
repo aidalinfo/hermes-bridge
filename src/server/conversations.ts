@@ -53,6 +53,24 @@ export class ConversationStore {
     return true
   }
 
+  /**
+   * Push out a pending request's deadline — called when the target agent's
+   * adapter reports it's still actively working (post_tool_call /
+   * post_llm_call hooks), so slow-but-alive answers aren't killed by a fixed
+   * `ask_timeout_ms`. Re-arms the same timeout window from now; does nothing
+   * (returns false) if the request already resolved or timed out.
+   */
+  extendRequest(requestId: string, timeoutMs: number = this.defaultTimeoutMs): boolean {
+    const entry = this.pending.get(requestId)
+    if (!entry) return false
+    clearTimeout(entry.timer)
+    entry.timer = setTimeout(() => {
+      this.pending.delete(requestId)
+      entry.reject(new Error('timeout'))
+    }, timeoutMs)
+    return true
+  }
+
   rejectAllTo(agentName: string, reason: string): void {
     for (const [requestId, entry] of this.pending) {
       if (entry.to === agentName) {

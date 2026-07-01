@@ -60,4 +60,30 @@ describe('ConversationStore', () => {
     expect(store.hasConversation(conversationId)).toBe(true)
     expect(store.hasConversation('never-seen')).toBe(false)
   })
+
+  it('extendRequest re-arms the deadline so a request outlives the original timeout', async () => {
+    const store = new ConversationStore(30)
+    const { requestId, promise } = store.createRequest({ to: 'helpdesk-bot', from: 'daniel-bot' })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(store.extendRequest(requestId)).toBe(true)
+    // Original 30ms window would have expired by now (~35ms elapsed); the
+    // extension should have pushed it out by another full window.
+    await new Promise((r) => setTimeout(r, 20))
+    expect(store.resolveRequest(requestId, 'still here')).toBe(true)
+    await expect(promise).resolves.toBe('still here')
+  })
+
+  it('extendRequest returns false for an unknown or already-settled requestId', async () => {
+    const store = new ConversationStore(10)
+    expect(store.extendRequest('does-not-exist')).toBe(false)
+    const { requestId, promise } = store.createRequest({ to: 'helpdesk-bot', from: 'daniel-bot' })
+    await expect(promise).rejects.toThrow('timeout')
+    expect(store.extendRequest(requestId)).toBe(false)
+  })
+
+  it('a request left un-extended still times out on the original window', async () => {
+    const store = new ConversationStore(15)
+    const { promise } = store.createRequest({ to: 'helpdesk-bot', from: 'daniel-bot' })
+    await expect(promise).rejects.toThrow('timeout')
+  })
 })
