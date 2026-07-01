@@ -19,6 +19,7 @@ export function runInstall(opts: InstallOptions): void {
   const pluginDir = join(dataDir, '.hermes', 'plugins', 'hermes-bridge')
   mkdirSync(pluginDir, { recursive: true })
   cpSync(join(ADAPTER_SRC_DIR, 'plugin.yaml'), join(pluginDir, 'plugin.yaml'))
+  cpSync(join(ADAPTER_SRC_DIR, '__init__.py'), join(pluginDir, '__init__.py'))
   cpSync(join(ADAPTER_SRC_DIR, 'adapter.py'), join(pluginDir, 'adapter.py'))
   cpSync(join(ADAPTER_SRC_DIR, 'wake.py'), join(pluginDir, 'wake.py'))
 

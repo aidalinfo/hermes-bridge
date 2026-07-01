@@ -5,6 +5,13 @@ import { z } from 'zod'
 const ConfigSchema = z.object({
   agents: z.array(z.object({ name: z.string(), token: z.string() })),
   ask_timeout_ms: z.number().int().positive().default(120_000),
+  langfuse: z
+    .object({
+      public_key: z.string(),
+      secret_key: z.string(),
+      base_url: z.string().optional(),
+    })
+    .optional(),
 })
 
 export type BridgeConfig = z.infer<typeof ConfigSchema>

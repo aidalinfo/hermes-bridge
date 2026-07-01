@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { AgentRegistry } from '../../src/server/registry.js'
 import { ConversationStore } from '../../src/server/conversations.js'
+import { createTelemetry } from '../../src/server/telemetry.js'
 import { handleAskAgent, handleReply, handleListAgents } from '../../src/server/handlers.js'
 
 function setup(timeoutMs = 50) {
@@ -9,7 +10,8 @@ function setup(timeoutMs = 50) {
     { name: 'helpdesk-bot', token: 'tok-helpdesk' },
   ])
   const conversations = new ConversationStore(timeoutMs)
-  return { registry, conversations, deps: { registry, conversations } }
+  const telemetry = createTelemetry(undefined)
+  return { registry, conversations, telemetry, deps: { registry, conversations, telemetry } }
 }
 
 describe('handleAskAgent', () => {
@@ -86,6 +88,30 @@ describe('handleAskAgent', () => {
       conversation_id: conversationId,
       answer: 'second-answer',
     })
+  })
+
+  it('records a completed exchange in telemetry once the reply arrives', async () => {
+    const { deps, registry, telemetry } = setup()
+    let delivered: { request_id: string } | undefined
+    registry.setOnline('helpdesk-bot', (data) => {
+      delivered = JSON.parse(data)
+    })
+    const pending = handleAskAgent(deps, 'daniel-bot', { to: 'helpdesk-bot', message: 'hi' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    handleReply(deps, { request_id: delivered!.request_id, answer: '42' })
+    await pending
+
+    const exchanges = telemetry.recentExchanges()
+    expect(exchanges).toHaveLength(1)
+    expect(exchanges[0]).toEqual(
+      expect.objectContaining({
+        from: 'daniel-bot',
+        to: 'helpdesk-bot',
+        message: 'hi',
+        status: 'ok',
+        answer: '42',
+      }),
+    )
   })
 })
 

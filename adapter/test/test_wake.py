@@ -1,12 +1,24 @@
+import importlib.util
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from wake import build_wake_text, parse_wake_payload, session_chat_id
+# Load wake.py directly by file path rather than via sys.path + `import wake`.
+# adapter/ now has an __init__.py (required by Hermes' plugin loader — see
+# adapter/__init__.py), so adding adapter/ to sys.path and importing `wake`
+# risks pulling in adapter/__init__.py -> adapter.py -> `gateway.*`, which
+# isn't installed outside a real Hermes runtime. This keeps the test fully
+# standalone, as intended (see README: "wake.py — logique pure, sans
+# dépendance Hermes").
+_spec = importlib.util.spec_from_file_location(
+    "wake", Path(__file__).resolve().parents[1] / "wake.py"
+)
+wake = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(wake)
+build_wake_text = wake.build_wake_text
+parse_wake_payload = wake.parse_wake_payload
+session_chat_id = wake.session_chat_id
 
 
 def test_session_chat_id_is_namespaced_by_conversation():

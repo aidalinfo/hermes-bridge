@@ -1,9 +1,11 @@
 import type { AgentRegistry } from './registry.js'
 import type { ConversationStore } from './conversations.js'
+import type { TelemetryRecorder } from './telemetry.js'
 
 export interface HandlerDeps {
   registry: AgentRegistry
   conversations: ConversationStore
+  telemetry: TelemetryRecorder
 }
 
 export type AskAgentResult =
@@ -18,7 +20,7 @@ export async function handleAskAgent(
   from: string,
   args: { to: string; message: string; conversation_id?: string },
 ): Promise<AskAgentResult> {
-  const { registry, conversations } = deps
+  const { registry, conversations, telemetry } = deps
   if (!registry.has(args.to)) {
     return { ok: false, error: 'unknown_agent' }
   }
@@ -42,12 +44,21 @@ export async function handleAskAgent(
   if (!delivered) {
     return { ok: false, error: 'agent_offline' }
   }
+  const record = telemetry.recordStart({
+    conversationId,
+    requestId,
+    from,
+    to: args.to,
+    message: args.message,
+  })
   try {
     const answer = await promise
+    telemetry.recordEnd(record, { status: 'ok', answer })
     return { ok: true, conversation_id: conversationId, answer }
   } catch (err) {
-    const reason = err instanceof Error ? err.message : 'timeout'
-    return { ok: false, error: reason as 'timeout' | 'agent_disconnected' }
+    const reason = (err instanceof Error ? err.message : 'timeout') as 'timeout' | 'agent_disconnected'
+    telemetry.recordEnd(record, { status: reason, error: reason })
+    return { ok: false, error: reason }
   }
 }
 
