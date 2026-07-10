@@ -1,7 +1,7 @@
 name: hermes-bridge
 label: Hermes Bridge
 kind: platform
-version: 0.1.3
+version: 0.1.4
 description: >
   Pont de communication entre agents Hermes. Ouvre une connexion WebSocket
   sortante vers un relais hermes-bridge ; les messages reçus déclenchent un
