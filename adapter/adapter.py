@@ -141,7 +141,13 @@ class HermesBridgeAdapter(BasePlatformAdapter):
         self._last_heartbeat: Dict[str, float] = {}
         self._heartbeat_lock = threading.Lock()
 
-    async def connect(self) -> bool:
+    async def connect(self, *, is_reconnect: bool = False) -> bool:
+        # ``is_reconnect`` is keyword-only with a default so this stays
+        # compatible with older Hermes gateways (which call ``connect()``
+        # with no argument) as well as newer ones that pass
+        # ``connect(is_reconnect=...)``. The bridge re-establishes its own
+        # WebSocket via ``_run``'s reconnect loop regardless, so the flag is
+        # accepted for signature compatibility.
         self._loop = asyncio.get_running_loop()
         self._task = asyncio.create_task(self._run())
         self._mark_connected()
